@@ -1,0 +1,50 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+tmp/
+temp/
+
+# yint C core build outputs
+core/bin/*.o
+core/bin/yint
+core/bin/yint.exe
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.venv/
+venv/
+
+# Rust
+target/
+Cargo.lock
+
+# PHP / Composer
+vendor/
+composer.lock
+.phpunit.cache/
+
+# PowerShell
+*.ps1xml.cache
+
+# Shell test nonce files, when tests are run from the repository root
+yint-nonces.txt
