@@ -1,0 +1,19 @@
+{
+  "name": "water-run/yint",
+  "description": "Modern PHP implementation of the yint HTTP envelope",
+  "type": "library",
+  "license": "LGPL-3.0-or-later",
+  "require": {
+    "php": ">=8.3"
+  },
+  "autoload": {
+    "psr-4": {
+      "Yint\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Yint\\Tests\\": "tests/"
+    }
+  }
+}

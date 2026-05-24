@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yint"
+version = "1.0.0"
+description = "Modern Python implementation of the yint HTTP envelope"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "LGPL-3.0-or-later"
+authors = [{ name = "Water Run" }]
+keywords = ["http", "hmac", "aes", "yint"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/yint"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
