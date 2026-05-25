@@ -31,7 +31,7 @@ class Yint
     var $time_window;
     var $k_enc_hex;
     var $k_mac_hex;
-    var $nonces;
+    var $nonce_dir;
 
     function __construct($master_key, $core_path = null, $time_window = null)
     {
@@ -52,7 +52,12 @@ class Yint
 
         $this->core_path = $core_path;
         $this->time_window = intval($time_window);
-        $this->nonces = array();
+
+        // 共享 nonce 存储 (文件系统, 跨进程可见)
+        $this->nonce_dir = sys_get_temp_dir() . '/yint_nonces';
+        if (!is_dir($this->nonce_dir)) {
+            @mkdir($this->nonce_dir, 0700, true);
+        }
 
         if ($this->time_window < 1) {
             throw new YintException('bad time window', 400, 'ERR_BAD_TIME_WINDOW');
@@ -126,7 +131,7 @@ class Yint
         }
 
         $this->_cleanup_nonces($now);
-        if (isset($this->nonces[$nonce])) {
+        if (file_exists($this->nonce_dir . '/' . $nonce)) {
             throw new YintException('nonce replay detected within time window',
                 401, 'ERR_NONCE_REPLAY');
         }
@@ -146,7 +151,12 @@ class Yint
                 401, 'ERR_VERIFY_INTERNAL');
         }
 
-        $this->nonces[$nonce] = $ts + $this->time_window;
+        // 原子写入 nonce 文件 (fopen 'x' 模式排他创建)
+        $fp = @fopen($this->nonce_dir . '/' . $nonce, 'x');
+        if ($fp) {
+            fwrite($fp, strval($ts + $this->time_window));
+            fclose($fp);
+        }
         return $this->decrypt_body($body);
     }
 
@@ -352,11 +362,18 @@ class Yint
 
     function _cleanup_nonces($now)
     {
-        foreach ($this->nonces as $nonce => $expire_at) {
-            if ($expire_at < $now) {
-                unset($this->nonces[$nonce]);
+        $dir = $this->nonce_dir;
+        $dh = @opendir($dir);
+        if (!$dh) return;
+        while (($file = readdir($dh)) !== false) {
+            if ($file === '.' || $file === '..') continue;
+            $path = $dir . '/' . $file;
+            $expire = @file_get_contents($path);
+            if ($expire !== false && intval($expire) < $now) {
+                @unlink($path);
             }
         }
+        closedir($dh);
     }
 
     function _is_lower_hex($s, $len)
