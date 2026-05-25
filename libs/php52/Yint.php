@@ -10,16 +10,18 @@
 class YintException extends Exception
 {
     var $status;
+    var $error_code; // stable token for callers, e.g. ERR_TIMESTAMP_OUT_OF_WINDOW
 
-    function __construct($message, $status)
+    function __construct($message, $status, $error_code = 'ERR_INTERNAL')
     {
-        $this->YintException($message, $status);
+        $this->YintException($message, $status, $error_code);
     }
 
-    function YintException($message, $status)
+    function YintException($message, $status, $error_code = 'ERR_INTERNAL')
     {
         parent::__construct($message);
         $this->status = $status;
+        $this->error_code = $error_code;
     }
 }
 
@@ -53,16 +55,16 @@ class Yint
         $this->nonces = array();
 
         if ($this->time_window < 1) {
-            throw new YintException('bad time window', 400);
+            throw new YintException('bad time window', 400, 'ERR_BAD_TIME_WINDOW');
         }
         if (!is_file($this->core_path)) {
-            throw new YintException('core not found: ' . $this->core_path, 500);
+            throw new YintException('core not found: ' . $this->core_path, 500, 'ERR_CORE_MISSING');
         }
 
         $out = $this->_run(array('derive', bin2hex($master_key)), null);
         $parts = preg_split('/\s+/', trim($out));
         if (count($parts) != 2 || !$this->_is_lower_hex($parts[0], 64) || !$this->_is_lower_hex($parts[1], 64)) {
-            throw new YintException('bad derive output', 500);
+            throw new YintException('bad derive output', 500, 'ERR_DERIVE');
         }
         $this->k_enc_hex = $parts[0];
         $this->k_mac_hex = $parts[1];
@@ -99,27 +101,49 @@ class Yint
         $nonce = $this->_required_header($h, 'x-yint-nonce');
         $sign = $this->_required_header($h, 'x-yint-sign');
 
-        if (!preg_match('/^[0-9]+$/', $timestamp) ||
-            !$this->_is_lower_hex($nonce, 32) ||
-            !$this->_is_lower_hex($sign, 64)) {
-            throw new YintException('bad yint headers', 400);
+        if (!preg_match('/^[0-9]+$/', $timestamp)) {
+            throw new YintException('bad X-Yint-Timestamp format (expect ASCII decimal seconds)',
+                400, 'ERR_BAD_TIMESTAMP_FORMAT');
+        }
+        if (!$this->_is_lower_hex($nonce, 32)) {
+            throw new YintException('bad X-Yint-Nonce format (expect 32 lowercase hex chars)',
+                400, 'ERR_BAD_NONCE_FORMAT');
+        }
+        if (!$this->_is_lower_hex($sign, 64)) {
+            throw new YintException('bad X-Yint-Sign format (expect 64 lowercase hex chars)',
+                400, 'ERR_BAD_SIGN_FORMAT');
         }
 
         $now = time();
         $ts = intval($timestamp);
-        if (abs($now - $ts) > $this->time_window) {
-            throw new YintException('unauthorized', 401);
+        $skew = $now - $ts;
+        if (abs($skew) > $this->time_window) {
+            throw new YintException(
+                'timestamp out of window (server_time=' . $now
+                . ', client_time=' . $ts
+                . ', skew=' . $skew . 's, allowed=+/-' . $this->time_window . 's)',
+                401, 'ERR_TIMESTAMP_OUT_OF_WINDOW');
         }
 
         $this->_cleanup_nonces($now);
         if (isset($this->nonces[$nonce])) {
-            throw new YintException('unauthorized', 401);
+            throw new YintException('nonce replay detected within time window',
+                401, 'ERR_NONCE_REPLAY');
         }
 
         $body_hex = bin2hex($body);
         $out = trim($this->_run(array('verify-req', $this->k_mac_hex, $method, $uri, $timestamp, $nonce, $sign, '-'), $body_hex, true));
+        if ($out === 'ERR_SIGN') {
+            throw new YintException('signature mismatch (HMAC-SHA256 over METHOD|URI|TS|NONCE|BODY did not match X-Yint-Sign)',
+                401, 'ERR_SIGN_MISMATCH');
+        }
+        if ($out === 'ERR_PADDING') {
+            throw new YintException('ciphertext padding invalid (signature OK but PKCS#7 strip failed)',
+                401, 'ERR_BAD_PADDING');
+        }
         if ($out !== 'OK') {
-            throw new YintException('unauthorized', 401);
+            throw new YintException('verify-req returned unexpected token: ' . $out,
+                401, 'ERR_VERIFY_INTERNAL');
         }
 
         $this->nonces[$nonce] = $ts + $this->time_window;
@@ -243,6 +267,18 @@ class Yint
             $cmd .= ' ' . escapeshellarg($args[$i]);
         }
 
+        // Windows-specific quoting fix.
+        // PHP's proc_open() on Windows wraps the supplied string with
+        // `cmd.exe /c "..."`. cmd.exe then strips ONE outer pair of quotes
+        // from the whole string. With multiple internally-quoted arguments
+        // the result is an unbalanced command line and cmd.exe reports
+        // 'not recognized as an internal or external command'. The standard
+        // workaround is to wrap the entire pre-built command in another
+        // pair of quotes so the pair cmd.exe strips is the artificial one.
+        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+            $cmd = '"' . $cmd . '"';
+        }
+
         $desc = array(
             0 => array('pipe', 'r'),
             1 => array('pipe', 'w'),
@@ -269,7 +305,7 @@ class Yint
             if ($allow_sign_error && ($tag == 'ERR_SIGN' || $tag == 'ERR_PADDING')) {
                 return $tag;
             }
-            throw new YintException('core failed: ' . $tag, 500);
+            throw new YintException('core failed: ' . $tag, 500, 'ERR_CORE_FAILED');
         }
         return $out;
     }
@@ -299,7 +335,8 @@ class Yint
                 $k != 'x-yint-timestamp' &&
                 $k != 'x-yint-nonce' &&
                 $k != 'x-yint-sign') {
-                throw new YintException('bad yint headers', 400);
+                throw new YintException('unknown X-Yint-* header: ' . $k,
+                    400, 'ERR_UNKNOWN_YINT_HEADER');
             }
         }
     }
@@ -307,7 +344,8 @@ class Yint
     function _required_header($headers, $name)
     {
         if (!isset($headers[$name])) {
-            throw new YintException('missing yint header', 400);
+            throw new YintException('missing required header: ' . $name,
+                400, 'ERR_MISSING_HEADER');
         }
         return strval($headers[$name]);
     }

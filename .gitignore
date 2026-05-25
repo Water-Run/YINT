@@ -48,3 +48,7 @@ composer.lock
 
 # Shell test nonce files, when tests are run from the repository root
 yint-nonces.txt
+
+# Temporary test directories
+temp_test/
+
